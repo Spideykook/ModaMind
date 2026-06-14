@@ -5,8 +5,6 @@ visually similar items in a catalog, using a ResNet50 embedding pipeline and
 a FAISS cosine-similarity index, exposed through a Django REST Framework API
 and a vanilla HTML/CSS/JS dashboard.
 
-This README covers **Phase 1** (ML + FAISS core) and **Phase 2**
-(Django app, API, and frontend dashboard).
 
 ```
 modamind/
