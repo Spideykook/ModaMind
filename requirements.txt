@@ -1,0 +1,26 @@
+# --- Web framework ---
+Django>=4.2,<5.0
+djangorestframework>=3.14,<3.16
+
+# --- AI / ML core ---
+torch>=2.1,<2.4
+torchvision>=0.16,<0.19
+faiss-cpu>=1.7.4,<1.9
+numpy>=1.24,<2.0
+
+# --- Image handling ---
+Pillow>=10.0,<11.0
+
+# --- Configuration / security ---
+# Loads secrets (SECRET_KEY, DEBUG, ALLOWED_HOSTS) from a local .env file
+# instead of hardcoding them in settings.py. See .env.example.
+python-dotenv>=1.0,<2.0
+
+django
+djangorestframework
+torch
+torchvision
+faiss-cpu
+numpy
+pillow
+python-dotenv

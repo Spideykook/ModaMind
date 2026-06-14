@@ -1,0 +1,94 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>ModaMind</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="{% static 'modapp/css/style.css' %}">
+</head>
+<body>
+
+    <!-- Ambient background blobs (signature element) -->
+    <div class="blob blob--1" aria-hidden="true"></div>
+    <div class="blob blob--2" aria-hidden="true"></div>
+    <div class="blob blob--3" aria-hidden="true"></div>
+
+    <!-- Hero zone -->
+    <header class="hero">
+        <div class="hero__panel glass-panel">
+            <span class="hero__eyebrow"> Made for Fashion Enthusiasts</span>
+            <h1 class="hero__title">Moda<span class="hero__title-accent">Mind</span></h1>
+            <p class="hero__subtitle">
+                Upload a piece you love and let us find visually similar styles
+                from the catalog 
+            </p>
+        </div>
+    </header>
+
+    <main class="container">
+
+        <!-- Drag-and-drop upload section -->
+        <section class="card glass-panel upload-section" id="upload-section" aria-label="Upload an image to search">
+
+            <div class="upload-zone"
+                 id="drop-zone"
+                 role="button"
+                 tabindex="0"
+                 aria-label="Click or drop an image to start a similarity search">
+                <div class="upload-zone__icon" aria-hidden="true">📸</div>
+                <h2 class="upload-zone__title">Drag &amp; drop a fashion photo</h2>
+                <p class="upload-zone__hint">or click to browse — JPG, PNG, or WEBP or PDF up to 10MB</p>
+                <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/pdf" hidden>
+            </div>
+
+            <div class="preview" id="preview-wrapper" hidden>
+                <img class="preview__image" id="preview-image" alt="Uploaded preview">
+                <button type="button" class="btn-ghost" id="reset-btn">Try another image</button>
+            </div>
+
+        </section>
+
+        <!-- AI analysis loading state -->
+        <section class="loader-section" id="loader-section" hidden aria-live="polite">
+            <div class="ai-loader">
+                <div class="orbit-stage" aria-hidden="true">
+                    <div class="orbit-core"></div>
+                    <div class="orbit">
+                        <span class="orbit-dot"></span>
+                        <span class="orbit-dot"></span>
+                        <span class="orbit-dot"></span>
+                    </div>
+                </div>
+                <p class="ai-loader__text">Analyzing silhouette, color &amp; texture&hellip;</p>
+            </div>
+        </section>
+
+        <!-- Error feedback -->
+        <section class="error-banner" id="error-banner" hidden role="alert">
+            <p id="error-message"></p>
+        </section>
+
+        <!-- Visual similarity results -->
+        <section class="results-section" id="results-section" hidden>
+            <h2 class="results-section__title">Similar Styles For You</h2>
+            <div class="results-grid" id="results-grid">
+                <!-- Result cards are injected here by app.js -->
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="site-footer">
+        <p>ModaMind &amp; Stylist Assistant</p>
+    </footer>
+
+    <script src="{% static 'modapp/js/app.js' %}"></script>
+</body>
+</html>

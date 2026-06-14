@@ -1,0 +1,29 @@
+# --- Secrets ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Django ---
+db.sqlite3
+staticfiles/
+
+# --- User-uploaded media (clothing photos) ---
+media/clothing_images/*
+!media/clothing_images/.gitkeep
+
+# --- FAISS index artifacts ---
+# Rebuildable at any time via `python manage.py build_index --rebuild`,
+# and may contain references to local media paths, so it shouldn't be
+# committed alongside source code.
+modapp/search/indexes/*.index
+!modapp/search/indexes/.gitkeep
+
+# --- Editor / OS ---
+.DS_Store
+.vscode/
+.idea/
