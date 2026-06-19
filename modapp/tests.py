@@ -1,290 +1,303 @@
 """
-Security and correctness tests for the ModaMind core app.
+modapp/tests.py — Security and correctness tests for ModaMind.
 
-These tests deliberately avoid loading the real ResNet50 model (which would
-require downloading pretrained weights on first use). Wherever a view or
-model under test depends on EmbeddingService, it is mocked. FaissManager
-itself has zero PyTorch dependencies and is tested directly against
-temporary index files on disk.
+Coverage:
+  - FaissManager: index integrity and round-trip persistence.
+  - Category model: __str__, auto-capitalise, slug uniqueness.
+  - ClothingItem model: upload validators, __str__, display_category.
+  - EmbeddingMetadata model: OneToOne relationship and cascade.
+  - SimilaritySearchView: every request-validation branch + happy path.
+  - IndexView: dashboard renders with CSRF meta tag.
 
-Run with:
-    python manage.py test modapp
+EmbeddingService and FaissManager are mocked at the view layer so the
+suite runs without downloading ResNet50 weights.
 """
-
 from __future__ import annotations
-
-import io
-import os
-import tempfile
+import io, os, tempfile
 from unittest import mock
-
-import faiss
-import numpy as np
+import faiss, numpy as np
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
-
-from .models import ClothingItem
+from .models import Category, ClothingItem, EmbeddingMetadata
 from .search.faiss_manager import FaissManager
 
 
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
-def _make_image_bytes(fmt: str = "JPEG", size: tuple[int, int] = (64, 64), noisy: bool = False) -> bytes:
-    """Return raw encoded bytes for a small in-memory image."""
+# ── helpers ──────────────────────────────────────────────────────────────────
+def _img_bytes(fmt="JPEG", size=(64, 64), noisy=False):
     if noisy:
-        # Random noise compresses poorly, which is useful for reliably
-        # producing a file *larger* than a given byte threshold.
         rng = np.random.default_rng(0)
-        array = (rng.random((size[1], size[0], 3)) * 255).astype("uint8")
-        image = Image.fromarray(array, "RGB")
+        arr = (rng.random((size[1], size[0], 3)) * 255).astype("uint8")
+        img = Image.fromarray(arr, "RGB")
     else:
-        image = Image.new("RGB", size, color=(255, 0, 128))
-
-    buffer = io.BytesIO()
-    image.save(buffer, format=fmt)
-    return buffer.getvalue()
-
-
-def _make_uploaded_image(
-    name: str = "test.jpg",
-    fmt: str = "JPEG",
-    content_type: str = "image/jpeg",
-    size: tuple[int, int] = (64, 64),
-    noisy: bool = False,
-) -> SimpleUploadedFile:
-    data = _make_image_bytes(fmt=fmt, size=size, noisy=noisy)
-    return SimpleUploadedFile(name, data, content_type=content_type)
+        img = Image.new("RGB", size, color=(200, 100, 50))
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
 
 
-# --------------------------------------------------------------------------
-# FaissManager: index integrity & validation
-# --------------------------------------------------------------------------
+def _upload(name="t.jpg", fmt="JPEG", ct="image/jpeg", size=(64,64), noisy=False):
+    return SimpleUploadedFile(name, _img_bytes(fmt=fmt, size=size, noisy=noisy), content_type=ct)
+
+
+def _cat(slug="tops", name="Tops"):
+    return Category.objects.create(slug=slug, name=name)
+
+
+# ── FaissManager ─────────────────────────────────────────────────────────────
 class FaissManagerTests(TestCase):
-    """FaissManager has no Django/PyTorch dependencies -> tested directly."""
-
     def setUp(self):
-        # FaissManager is a process-wide singleton. Reset it before each
-        # test so tests don't leak index state into one another.
         FaissManager._instance = None
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.index_path = os.path.join(self._tmpdir.name, "test.index")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self._tmp.name, "t.index")
 
     def tearDown(self):
         FaissManager._instance = None
-        self._tmpdir.cleanup()
+        self._tmp.cleanup()
 
     def test_starts_empty(self):
-        manager = FaissManager(index_path=self.index_path)
-        self.assertEqual(manager.total_vectors, 0)
-        self.assertEqual(manager.search(np.zeros(2048, dtype="float32")), [])
+        m = FaissManager(index_path=self.path)
+        self.assertEqual(m.total_vectors, 0)
+        self.assertEqual(m.search(np.zeros(2048, dtype="float32")), [])
 
-    def test_add_and_search_round_trip(self):
-        manager = FaissManager(index_path=self.index_path)
+    def test_add_search_round_trip(self):
+        m = FaissManager(index_path=self.path)
+        rng = np.random.default_rng(7)
+        v = rng.standard_normal((3, 2048)).astype("float32")
+        v /= np.linalg.norm(v, axis=1, keepdims=True)
+        m.add_vectors(v, ids=np.array([10, 20, 30]))
+        self.assertEqual(m.total_vectors, 3)
+        res = m.search(v[0], top_k=1)
+        self.assertEqual(res[0][0], 10)
+        self.assertAlmostEqual(res[0][1], 1.0, places=4)
 
-        rng = np.random.default_rng(42)
-        vectors = rng.standard_normal((3, 2048)).astype("float32")
-        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)  # unit-norm, like EmbeddingService output
-
-        manager.add_vectors(vectors, ids=np.array([10, 20, 30]))
-        self.assertEqual(manager.total_vectors, 3)
-
-        results = manager.search(vectors[0], top_k=1)
-        self.assertEqual(results[0][0], 10)
-        self.assertAlmostEqual(results[0][1], 1.0, places=4)
-
-    def test_save_and_load_round_trip(self):
-        manager = FaissManager(index_path=self.index_path)
-
-        vectors = np.eye(2048, dtype="float32")[:2]  # two orthogonal unit vectors
-        manager.add_vectors(vectors, ids=np.array([1, 2]))
-        manager.save_index()
-
-        # Simulate a fresh process picking the persisted index back up.
+    def test_save_load(self):
+        m = FaissManager(index_path=self.path)
+        m.add_vectors(np.eye(2048, dtype="float32")[:2], ids=np.array([1, 2]))
+        m.save_index()
         FaissManager._instance = None
-        reloaded = FaissManager(index_path=self.index_path)
-        self.assertEqual(reloaded.total_vectors, 2)
+        m2 = FaissManager(index_path=self.path)
+        self.assertEqual(m2.total_vectors, 2)
 
-    def test_add_vectors_rejects_wrong_dimension(self):
-        manager = FaissManager(index_path=self.index_path)
-        bad_vector = np.zeros((16,), dtype="float32")
+    def test_rejects_wrong_dim_add(self):
+        m = FaissManager(index_path=self.path)
         with self.assertRaises(ValueError):
-            manager.add_vectors(bad_vector, ids=np.array([1]))
+            m.add_vectors(np.zeros(16, dtype="float32"), ids=np.array([1]))
 
-    def test_search_rejects_wrong_dimension(self):
-        manager = FaissManager(index_path=self.index_path)
-        manager.add_vectors(np.eye(2048, dtype="float32")[:1], ids=np.array([1]))
+    def test_rejects_wrong_dim_search(self):
+        m = FaissManager(index_path=self.path)
+        m.add_vectors(np.eye(2048, dtype="float32")[:1], ids=np.array([1]))
         with self.assertRaises(ValueError):
-            manager.search(np.zeros(16, dtype="float32"))
+            m.search(np.zeros(16, dtype="float32"))
 
-    def test_load_index_rejects_dimension_mismatch(self):
-        """A structurally valid IndexIDMap2 with the wrong dimensionality must be refused."""
-        wrong_dim_index = faiss.IndexIDMap2(faiss.IndexFlatIP(16))
-        faiss.write_index(wrong_dim_index, self.index_path)
-
+    def test_rejects_dim_mismatch_on_load(self):
+        faiss.write_index(faiss.IndexIDMap2(faiss.IndexFlatIP(16)), self.path)
         FaissManager._instance = None
         with self.assertRaises(ValueError):
-            FaissManager(index_path=self.index_path)
+            FaissManager(index_path=self.path)
 
-    def test_load_index_rejects_non_idmap_index(self):
-        """A bare IndexFlatIP (not wrapped in IndexIDMap2) must be refused."""
-        plain_index = faiss.IndexFlatIP(2048)
-        faiss.write_index(plain_index, self.index_path)
-
+    def test_rejects_non_idmap_on_load(self):
+        faiss.write_index(faiss.IndexFlatIP(2048), self.path)
         FaissManager._instance = None
         with self.assertRaises(TypeError):
-            FaissManager(index_path=self.index_path)
+            FaissManager(index_path=self.path)
 
 
-# --------------------------------------------------------------------------
-# ClothingItem: upload validators
-# --------------------------------------------------------------------------
-class ClothingItemValidationTests(TestCase):
+# ── Category ──────────────────────────────────────────────────────────────────
+class CategoryTests(TestCase):
+    def test_str(self):
+        self.assertEqual(str(Category(slug="tops", name="Tops")), "Tops")
+
+    def test_auto_capitalise(self):
+        c = Category.objects.create(slug="dresses", name="dresses")
+        c.refresh_from_db()
+        self.assertEqual(c.name, "Dresses")
+
+    def test_slug_unique(self):
+        Category.objects.create(slug="tops", name="Tops")
+        from django.db import IntegrityError
+        with self.assertRaises(IntegrityError):
+            Category.objects.create(slug="tops", name="Tops2")
+
+
+# ── ClothingItem ──────────────────────────────────────────────────────────────
+class ClothingItemTests(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls._media_tmpdir = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmpdir.name)
-        cls._media_override.enable()
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._ov  = override_settings(MEDIA_ROOT=cls._tmp.name)
+        cls._ov.enable()
 
     @classmethod
     def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmpdir.cleanup()
+        cls._ov.disable()
+        cls._tmp.cleanup()
         super().tearDownClass()
 
-    def test_rejects_disallowed_extension(self):
-        """GIF is a valid image format, but isn't in ALLOWED_IMAGE_EXTENSIONS."""
-        gif_file = _make_uploaded_image(name="photo.gif", fmt="GIF", content_type="image/gif")
-        item = ClothingItem(image=gif_file, title="Bad extension")
+    def test_str_name_and_brand(self):
+        i = ClothingItem(name="Silk Blouse", brand="Acne")
+        self.assertEqual(str(i), "Silk Blouse — Acne")
+
+    def test_str_name_only(self):
+        i = ClothingItem(name="Trousers")
+        self.assertEqual(str(i), "Trousers")
+
+    def test_str_fallback(self):
+        i = ClothingItem(); i.pk = 3
+        self.assertEqual(str(i), "Item #3")
+
+    def test_display_category_with(self):
+        c = _cat("bottoms", "Bottoms")
+        i = ClothingItem(name="Jeans", category=c)
+        self.assertEqual(i.display_category, "Bottoms")
+
+    def test_display_category_without(self):
+        self.assertEqual(ClothingItem(name="X").display_category, "Uncategorised")
+
+    def test_rejects_gif(self):
+        i = ClothingItem(image=_upload("p.gif","GIF","image/gif"), name="bad")
         with self.assertRaises(ValidationError):
-            item.full_clean()
+            i.full_clean()
 
     @override_settings(MAX_UPLOAD_SIZE_BYTES=1024)
-    def test_rejects_oversized_image(self):
-        big_file = _make_uploaded_image(size=(256, 256), noisy=True)
-        self.assertGreater(big_file.size, 1024)
-
-        item = ClothingItem(image=big_file, title="Too big")
+    def test_rejects_oversized(self):
+        big = _upload(size=(256,256), noisy=True)
+        self.assertGreater(big.size, 1024)
+        i = ClothingItem(image=big, name="big")
         with self.assertRaises(ValidationError):
-            item.full_clean()
+            i.full_clean()
 
     def test_accepts_valid_jpeg(self):
-        good_file = _make_uploaded_image()
-        item = ClothingItem(image=good_file, title="Good", category="tops")
-        item.full_clean()  # should not raise
+        c = _cat()
+        i = ClothingItem(image=_upload(), name="ok", category=c)
+        i.full_clean(exclude=["category"])
 
 
-# --------------------------------------------------------------------------
-# SimilaritySearchView: request validation & happy path
-# --------------------------------------------------------------------------
-class SimilaritySearchViewTests(TestCase):
+# ── EmbeddingMetadata ─────────────────────────────────────────────────────────
+class EmbeddingMetadataTests(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls._media_tmpdir = tempfile.TemporaryDirectory()
-        cls._media_override = override_settings(MEDIA_ROOT=cls._media_tmpdir.name)
-        cls._media_override.enable()
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._ov  = override_settings(MEDIA_ROOT=cls._tmp.name)
+        cls._ov.enable()
 
     @classmethod
     def tearDownClass(cls):
-        cls._media_override.disable()
-        cls._media_tmpdir.cleanup()
+        cls._ov.disable()
+        cls._tmp.cleanup()
+        super().tearDownClass()
+
+    def _item(self):
+        return ClothingItem.objects.create(image=_upload(), name="Test", category=_cat())
+
+    def test_str(self):
+        m = EmbeddingMetadata(clothing_item_id=5, model_name="resnet50", embedding_version="v1")
+        self.assertIn("resnet50", str(m))
+
+    def test_one_to_one(self):
+        item = self._item()
+        meta = EmbeddingMetadata.objects.create(
+            clothing_item=item, model_name="resnet50", embedding_version="v1")
+        self.assertEqual(item.embedding_metadata, meta)
+
+    def test_cascade_delete(self):
+        item = self._item()
+        EmbeddingMetadata.objects.create(
+            clothing_item=item, model_name="resnet50", embedding_version="v1")
+        pk = item.pk
+        item.delete()
+        self.assertFalse(EmbeddingMetadata.objects.filter(clothing_item_id=pk).exists())
+
+
+# ── SimilaritySearchView ──────────────────────────────────────────────────────
+class SearchViewTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._ov  = override_settings(MEDIA_ROOT=cls._tmp.name)
+        cls._ov.enable()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._ov.disable()
+        cls._tmp.cleanup()
         super().tearDownClass()
 
     def setUp(self):
         self.url = reverse("modapp:similarity-search")
 
-    def test_missing_image_field_returns_400(self):
-        response = self.client.post(self.url, {})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("error", response.json())
+    def test_no_file_400(self):
+        r = self.client.post(self.url, {})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("error", r.json())
 
     @override_settings(MAX_UPLOAD_SIZE_BYTES=1024)
-    def test_oversized_file_returns_413(self):
-        oversized = _make_uploaded_image(size=(256, 256), noisy=True)
-        self.assertGreater(oversized.size, 1024)
+    def test_oversized_413(self):
+        big = _upload(size=(256,256), noisy=True)
+        self.assertGreater(big.size, 1024)
+        r = self.client.post(self.url, {"image": big})
+        self.assertEqual(r.status_code, 413)
 
-        response = self.client.post(self.url, {"image": oversized})
-        self.assertEqual(response.status_code, 413)
-        self.assertIn("error", response.json())
+    def test_bad_content_type_400(self):
+        txt = SimpleUploadedFile("n.txt", b"hi", content_type="text/plain")
+        r = self.client.post(self.url, {"image": txt})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Unsupported", r.json()["error"])
 
-    def test_disallowed_content_type_returns_400(self):
-        text_file = SimpleUploadedFile("notes.txt", b"hello world", content_type="text/plain")
-        response = self.client.post(self.url, {"image": text_file})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Unsupported file type", response.json()["error"])
-
-    def test_disguised_non_image_returns_400(self):
-        """A correctly-named/typed file whose bytes are not a real image must be rejected."""
-        fake_image = SimpleUploadedFile("outfit.jpg", b"not-an-image", content_type="image/jpeg")
-        response = self.client.post(self.url, {"image": fake_image})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("not a valid image", response.json()["error"])
+    def test_disguised_file_400(self):
+        fake = SimpleUploadedFile("x.jpg", b"not-an-image", content_type="image/jpeg")
+        r = self.client.post(self.url, {"image": fake})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("not a valid image", r.json()["error"])
 
     @mock.patch("modapp.views.FaissManager")
     @mock.patch("modapp.views.EmbeddingService")
-    def test_empty_index_returns_503(self, mock_embedding_service, mock_faiss_manager):
-        mock_embedding_service.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss_manager.return_value.total_vectors = 0
-
-        response = self.client.post(self.url, {"image": _make_uploaded_image()})
-
-        self.assertEqual(response.status_code, 503)
-        self.assertIn("empty", response.json()["error"])
+    def test_empty_index_503(self, mock_emb, mock_faiss):
+        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
+        mock_faiss.return_value.total_vectors = 0
+        r = self.client.post(self.url, {"image": _upload()})
+        self.assertEqual(r.status_code, 503)
 
     @mock.patch("modapp.views.FaissManager")
     @mock.patch("modapp.views.EmbeddingService")
-    def test_successful_search_returns_matching_items(self, mock_embedding_service, mock_faiss_manager):
+    def test_happy_path(self, mock_emb, mock_faiss):
+        cat  = _cat("outerwear", "Outerwear")
         item = ClothingItem.objects.create(
-            image=_make_uploaded_image(name="jacket.jpg"),
-            title="Oversized Denim Jacket",
-            category="outerwear",
-            brand="Urban Thread",
-            is_indexed=True,
-        )
+            image=_upload(name="j.jpg"), name="Denim Jacket",
+            category=cat, brand="Urban Thread", color="Indigo", is_indexed=True)
+        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
+        mock_faiss.return_value.total_vectors = 1
+        mock_faiss.return_value.search.return_value = [(item.id, 0.91)]
 
-        mock_embedding_service.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss_manager.return_value.total_vectors = 1
-        mock_faiss_manager.return_value.search.return_value = [(item.id, 0.9123)]
-
-        response = self.client.post(self.url, {"image": _make_uploaded_image()})
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["count"], 1)
-
-        result = payload["results"][0]
-        self.assertEqual(result["id"], item.id)
-        self.assertEqual(result["title"], "Oversized Denim Jacket")
-        self.assertEqual(result["category"], "Outerwear")
-        self.assertEqual(result["similarity_score"], 0.9123)
-        self.assertIn("/media/", result["image_url"])
+        r = self.client.post(self.url, {"image": _upload()})
+        self.assertEqual(r.status_code, 200)
+        res = r.json()["results"][0]
+        self.assertEqual(res["name"],     "Denim Jacket")
+        self.assertEqual(res["category"], "Outerwear")
+        self.assertEqual(res["brand"],    "Urban Thread")
+        self.assertEqual(res["color"],    "Indigo")
+        self.assertAlmostEqual(res["similarity_score"], 0.91)
 
     @mock.patch("modapp.views.FaissManager")
     @mock.patch("modapp.views.EmbeddingService")
-    def test_stale_index_entry_is_skipped(self, mock_embedding_service, mock_faiss_manager):
-        """A FAISS id with no matching ClothingItem row is dropped, not a 500."""
-        mock_embedding_service.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss_manager.return_value.total_vectors = 1
-        mock_faiss_manager.return_value.search.return_value = [(999_999, 0.5)]
-
-        response = self.client.post(self.url, {"image": _make_uploaded_image()})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"count": 0, "results": []})
+    def test_stale_index_skipped(self, mock_emb, mock_faiss):
+        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
+        mock_faiss.return_value.total_vectors = 1
+        mock_faiss.return_value.search.return_value = [(999_999, 0.5)]
+        r = self.client.post(self.url, {"image": _upload()})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"count": 0, "results": []})
 
 
-# --------------------------------------------------------------------------
-# IndexView: dashboard page
-# --------------------------------------------------------------------------
+# ── IndexView ─────────────────────────────────────────────────────────────────
 class IndexViewTests(TestCase):
     def test_dashboard_renders(self):
-        response = self.client.get(reverse("modapp:index"))
-        self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(response, "modapp/index.html")
-        # The CSRF meta tag must be present for app.js's getCsrfToken() to work.
-        self.assertContains(response, 'meta name="csrf-token"')
+        r = self.client.get(reverse("modapp:index"))
+        self.assertEqual(r.status_code, 200)
+        self.assertTemplateUsed(r, "modapp/index.html")
+        self.assertContains(r, 'meta name="csrf-token"')

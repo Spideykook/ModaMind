@@ -2,93 +2,186 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="csrf-token" content="{{ csrf_token }}">
-    <title>ModaMind</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>ModaMind</title>
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Serif+Display:ital@0;1&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 
-    <link rel="stylesheet" href="{% static 'modapp/css/style.css' %}">
+  <link rel="stylesheet" href="{% static 'modapp/css/style.css' %}">
 </head>
 <body>
 
-    <!-- Ambient background blobs (signature element) -->
-    <div class="blob blob--1" aria-hidden="true"></div>
-    <div class="blob blob--2" aria-hidden="true"></div>
-    <div class="blob blob--3" aria-hidden="true"></div>
+  <!-- ─── Navigation ─────────────────────────────────────────────────────── -->
+  <nav class="site-nav">
+    <a class="site-nav__brand" href="/">Moda<em>Mind</em></a>
+    <ul class="site-nav__links" role="list">
+      <li><a href="#upload" class="nav-link">Search</a></li>
+      <li><a href="/admin/" class="nav-link">Catalog</a></li>
+      <li><a href="#results" class="nav-link">Matches</a></li>
+    </ul>
+    <span class="site-nav__tag">Your Personal Style Assistant</span>
+  </nav>
 
-    <!-- Hero zone -->
-    <header class="hero">
-        <div class="hero__panel glass-panel">
-            <span class="hero__eyebrow"> Made for Fashion Enthusiasts</span>
-            <h1 class="hero__title">Moda<span class="hero__title-accent">Mind</span></h1>
-            <p class="hero__subtitle">
-                Upload a piece you love and let us find visually similar styles
-                from the catalog 
-            </p>
+  <!-- ─── Hero ────────────────────────────────────────────────────────────── -->
+  <header class="hero" id="hero">
+    <div class="hero__noise" aria-hidden="true"></div>
+
+    <div class="hero__body">
+      <div class="hero__stat-col" aria-hidden="true">
+        <div class="stat-block">
+          <span class="stat-block__num">Smart</span>
+          <span class="stat-block__label">Style<br>Matching</span>
         </div>
-    </header>
+        <div class="stat-block">
+          <span class="stat-block__num">Instant</span>
+          <span class="stat-block__label">Visual<br>Analysis</span>
+        </div>
+      </div>
 
-    <main class="container">
+      <div class="hero__headline">
+        <p class="hero__kicker">Discover Fashion with us</p>
+        <h1 class="hero__title">
+          <em>Find what</em><br>
+          looks like<br>
+          what you love.
+        </h1>
+        <p class="hero__sub">
+          Upload any fashion image and discover visually similar styles,
+          matching outfits, and personalized recommendations powered by AI.
+        </p>
+        <a href="#upload" class="btn-primary">Start Searching &darr;</a>
+      </div>
 
-        <!-- Drag-and-drop upload section -->
-        <section class="card glass-panel upload-section" id="upload-section" aria-label="Upload an image to search">
+      <div class="hero__stat-col hero__stat-col--right" aria-hidden="true">
+        <div class="stat-block stat-block--right">
+          <span class="stat-block__num">Curated</span>
+          <span class="stat-block__label">Fashion<br>Catalog</span>
+        </div>
+        <div class="stat-block stat-block--right">
+          <span class="stat-block__num">Top-5</span>
+          <span class="stat-block__label">Visual<br>Matches</span>
+        </div>
+      </div>
+    </div>
 
-            <div class="upload-zone"
-                 id="drop-zone"
-                 role="button"
-                 tabindex="0"
-                 aria-label="Click or drop an image to start a similarity search">
-                <div class="upload-zone__icon" aria-hidden="true">📸</div>
-                <h2 class="upload-zone__title">Drag &amp; drop a fashion photo</h2>
-                <p class="upload-zone__hint">or click to browse — JPG, PNG, or WEBP or PDF up to 10MB</p>
-                <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp,image/pdf" hidden>
-            </div>
+    <div class="hero__ticker" aria-hidden="true">
+      <div class="ticker__track">
+        Fashion &middot; Style &middot; Streetwear &middot; Casual &middot;
+        Formal &middot; Vintage &middot; Minimalist &middot; Sneakers &middot;
+        Hoodies &middot; Denim &middot; Outfit Inspiration &middot;
+        Smart Recommendations &middot; Fashion &middot; Style &middot;
+        Streetwear &middot; Casual &middot; Formal &middot; Vintage &middot;
+        Minimalist &middot; Sneakers &middot; Hoodies &middot; Denim
+      </div>
+    </div>
+  </header>
 
-            <div class="preview" id="preview-wrapper" hidden>
-                <img class="preview__image" id="preview-image" alt="Uploaded preview">
-                <button type="button" class="btn-ghost" id="reset-btn">Try another image</button>
-            </div>
+  <!-- ─── Main workspace ──────────────────────────────────────────────────── -->
+  <main class="workspace">
 
-        </section>
+    <!-- Upload panel -->
+    <section class="panel panel--upload" id="upload" aria-label="Upload an image">
+      <div class="panel__header">
+        <span class="panel__index">01</span>
+        <h2 class="panel__title">Upload Image</h2>
+      </div>
 
-        <!-- AI analysis loading state -->
-        <section class="loader-section" id="loader-section" hidden aria-live="polite">
-            <div class="ai-loader">
-                <div class="orbit-stage" aria-hidden="true">
-                    <div class="orbit-core"></div>
-                    <div class="orbit">
-                        <span class="orbit-dot"></span>
-                        <span class="orbit-dot"></span>
-                        <span class="orbit-dot"></span>
-                    </div>
-                </div>
-                <p class="ai-loader__text">Analyzing silhouette, color &amp; texture&hellip;</p>
-            </div>
-        </section>
+      <div class="drop-zone"
+           id="drop-zone"
+           role="button"
+           tabindex="0"
+           aria-label="Click or drop a fashion image to search">
+        <div class="drop-zone__inner" id="drop-inner">
+          <div class="drop-zone__icon" aria-hidden="true">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M20 4L20 28M20 4L12 12M20 4L28 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M6 32H34" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <p class="drop-zone__label">Drag &amp; drop a fashion photo</p>
+          <p class="drop-zone__hint">JPG · PNG · WEBP &nbsp;/&nbsp; max 10 MB</p>
+        </div>
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" hidden>
+      </div>
 
-        <!-- Error feedback -->
-        <section class="error-banner" id="error-banner" hidden role="alert">
-            <p id="error-message"></p>
-        </section>
+      <!-- Preview (hidden until file selected) -->
+      <div class="preview-block" id="preview-wrapper" hidden>
+        <div class="preview-block__frame">
+          <img class="preview-block__img" id="preview-image" alt="Your uploaded image">
+          <div class="preview-block__overlay" aria-hidden="true">
+            <span class="preview-block__label">Query Image</span>
+          </div>
+        </div>
+        <button type="button" class="btn-ghost" id="reset-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M2 2L12 12M12 2L2 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Clear &amp; upload new
+        </button>
+      </div>
+    </section>
 
-        <!-- Visual similarity results -->
-        <section class="results-section" id="results-section" hidden>
-            <h2 class="results-section__title">Similar Styles For You</h2>
-            <div class="results-grid" id="results-grid">
-                <!-- Result cards are injected here by app.js -->
-            </div>
-        </section>
+    <!-- AI Processing state -->
+    <section class="panel panel--loader" id="loader-section" hidden aria-live="polite">
+      <div class="panel__header">
+        <span class="panel__index">02</span>
+        <h2 class="panel__title">Analyzing</h2>
+      </div>
+      <div class="ai-loader">
+        <div class="scan-grid" aria-hidden="true">
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__bar"></div>
+          <div class="scan-grid__cursor"></div>
+        </div>
+        <div class="loader-text">
+          <p class="loader-text__main">Analyzing your style...&hellip;</p>
+          <p class="loader-text__sub" id="loader-step">Finding your styles and recommendations...</p>
+        </div>
+      </div>
+    </section>
 
-    </main>
+    <!-- Error -->
+    <section class="error-bar" id="error-banner" hidden role="alert">
+      <span class="error-bar__icon" aria-hidden="true">!</span>
+      <p id="error-message" class="error-bar__msg"></p>
+    </section>
 
-    <footer class="site-footer">
-        <p>ModaMind &amp; Stylist Assistant</p>
-    </footer>
+    <!-- Results -->
+    <section class="panel panel--results" id="results-section" hidden>
+      <div class="panel__header">
+        <span class="panel__index">03</span>
+        <h2 class="panel__title">Similar Styles</h2>
+        <span class="results-count" id="results-count"></span>
+      </div>
+      <div class="results-grid" id="results-grid">
+        <!-- Result cards injected by app.js -->
+      </div>
+    </section>
 
-    <script src="{% static 'modapp/js/app.js' %}"></script>
+  </main>
+
+  <!-- ─── Footer ──────────────────────────────────────────────────────────── -->
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <span class="site-footer__brand">ModaMind</span>
+      <nav class="site-footer__nav" aria-label="Footer">
+        <a href="/admin/">Admin</a>
+        <a href="#upload">New Search</a>
+      </nav>
+      <span class="site-footer__stack">
+      Discover &nbsp;&middot;&nbsp; Compare &nbsp;&middot;&nbsp; Style
+</span>
+    </div>
+  </footer>
+
+  <script src="{% static 'modapp/js/app.js' %}"></script>
 </body>
 </html>

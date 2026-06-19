@@ -257,6 +257,10 @@ ML_INDEX_PATH = BASE_DIR / "modapp" / "search" / "indexes" / "fashion_items.inde
 # Embedding dimensionality produced by EmbeddingService (ResNet50, fc removed).
 EMBEDDING_DIM = 2048
 
+# Stored in EmbeddingMetadata to detect stale vectors after a model upgrade.
+EMBEDDING_MODEL_NAME = "resnet50"
+EMBEDDING_VERSION = "resnet50-imagenet1k-v2-l2norm"
+
 
 # --------------------------------------------------------------------------
 # Logging
