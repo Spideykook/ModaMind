@@ -126,6 +126,38 @@ class Command(BaseCommand):
                 'brand': 'Clarks',
                 'color': 'Brown',
             },
+            {
+                'pattern': 'dark_denim_jacket_*.jpg',
+                'filename': 'dark_denim_jacket.jpg',
+                'name': 'Classic Dark Wash Denim Jacket',
+                'category_slug': 'outerwear',
+                'brand': "Levi's",
+                'color': 'Blue',
+            },
+            {
+                'pattern': 'black_hoodie_*.jpg',
+                'filename': 'black_hoodie.jpg',
+                'name': 'Comfort Black Cotton Hoodie',
+                'category_slug': 'tops',
+                'brand': 'Nike',
+                'color': 'Black',
+            },
+            {
+                'pattern': 'black_tshirt_*.jpg',
+                'filename': 'black_tshirt.jpg',
+                'name': 'Classic Black Crewneck Tee',
+                'category_slug': 'tops',
+                'brand': 'Hanes',
+                'color': 'Black',
+            },
+            {
+                'pattern': 'black_sneakers_*.jpg',
+                'filename': 'black_sneakers.jpg',
+                'name': 'Low-Top Black Leather Sneakers',
+                'category_slug': 'shoes',
+                'brand': 'Puma',
+                'color': 'Black',
+            },
         ]
 
         for item_data in items_to_seed:
