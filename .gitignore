@@ -27,4 +27,4 @@ modapp/search/indexes/*.index
 .DS_Store
 .vscode/
 .idea/
-.ModaMind_Explained.txt/
+ModaMind_Explained.txt
