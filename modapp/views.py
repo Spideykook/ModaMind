@@ -18,9 +18,8 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .ml.embedding_service import EmbeddingService
-from .models import ClothingItem
-from .search.faiss_manager import FaissManager
+from .models import Category, ClothingItem
+from .search.similarity_service import SimilaritySearchService
 
 logger = logging.getLogger(__name__)
 
@@ -75,33 +74,45 @@ class SimilaritySearchView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            embedder = EmbeddingService()
-            query_embedding = embedder.extract_embedding(image_bytes)
-        except Exception:
-            logger.exception("SimilaritySearchView: embedding extraction failed")
-            return Response(
-                {"error": "Could not process the uploaded image."},
-                status=status.HTTP_400_BAD_REQUEST,
+        service = SimilaritySearchService()
+
+        # --- Optional category filter ---
+        allowed_ids = None
+        category_slug = request.data.get("category", "").strip().lower()
+        if category_slug:
+            try:
+                cat = Category.objects.get(slug=category_slug)
+            except Category.DoesNotExist:
+                return Response(
+                    {"error": f"Unknown category slug: '{category_slug}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            allowed_ids = set(
+                ClothingItem.objects
+                .filter(category=cat, is_indexed=True)
+                .values_list("pk", flat=True)
             )
 
-        faiss_manager = FaissManager()
-        if faiss_manager.total_vectors == 0:
-            return Response(
-                {"error": "The similarity index is empty. Seed the catalog and run build_index first."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        search_response = service.search_by_image(
+            image_bytes, top_k=self.TOP_K, allowed_ids=allowed_ids,
+        )
 
-        matches = faiss_manager.search(query_embedding, top_k=self.TOP_K)
+        if not search_response.ok:
+            http_status = (
+                status.HTTP_503_SERVICE_UNAVAILABLE
+                if "index is empty" in search_response.error.lower()
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": search_response.error}, status=http_status)
 
         results: list[dict] = []
-        for item_id, score in matches:
+        for match in search_response.results:
             try:
-                item = ClothingItem.objects.select_related("category").get(pk=item_id)
+                item = ClothingItem.objects.select_related("category").get(pk=match.item_id)
             except ClothingItem.DoesNotExist:
                 logger.warning(
                     "SimilaritySearchView: FAISS id=%s has no ClothingItem (stale index?). Skipping.",
-                    item_id,
+                    match.item_id,
                 )
                 continue
 
@@ -114,7 +125,7 @@ class SimilaritySearchView(APIView):
                     "brand": item.brand,
                     "color": item.color,
                     "image_url": image_url,
-                    "similarity_score": round(score, 4),
+                    "similarity_score": match.similarity_score,
                 }
             )
 

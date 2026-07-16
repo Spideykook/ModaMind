@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import FrozenSet, List, Optional, Set, Union
 
 from ..ml.embedding_service import EmbeddingService, ImageInput
 from .faiss_manager import FaissManager
@@ -70,17 +70,28 @@ class SearchResponse:
         error:           If non-None, the search failed and this string
                          describes why. When error is set, results will
                          be empty.
+        category_filter: If the search was category-filtered, the number
+                         of allowed item IDs passed in.  None when no
+                         filter was applied.
     """
 
     results: List[SearchResult] = field(default_factory=list)
     total: int = 0
     query_time_ms: float = 0.0
     error: Optional[str] = None
+    category_filter: Optional[int] = None
 
     @property
     def ok(self) -> bool:
         """True if the search completed without error."""
         return self.error is None
+
+
+# ---------------------------------------------------------------------------
+# Type alias for the category-filter parameter.
+# ---------------------------------------------------------------------------
+
+AllowedIDs = Optional[Union[Set[int], FrozenSet[int]]]
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +123,10 @@ class SimilaritySearchService:
         - ``default_top_k`` is configurable per instance so different
           consumers (API endpoint, batch evaluation, admin preview) can
           use different defaults without subclassing.
+        - Category filtering uses a caller-supplied set of allowed IDs
+          (``allowed_ids``).  The service itself never touches a database
+          or metadata sidecar — the caller pre-computes the set from
+          whatever data source it uses (Django ORM, metadata JSON, etc.).
 
     Usage:
         service = SimilaritySearchService()
@@ -119,9 +134,14 @@ class SimilaritySearchService:
         if response.ok:
             for r in response.results:
                 print(f"Item {r.item_id}: {r.similarity_score:.4f}")
+
+        # With category filtering (caller supplies IDs):
+        tops_ids = {1, 5, 12, 37}  # pre-computed from your data source
+        response = service.search_by_image(image_bytes, allowed_ids=tops_ids)
     """
 
     DEFAULT_TOP_K = 5
+    CATEGORY_OVERFETCH_FACTOR = 3
 
     def __init__(self, default_top_k: int = DEFAULT_TOP_K) -> None:
         """
@@ -135,6 +155,7 @@ class SimilaritySearchService:
         self,
         image_input: ImageInput,
         top_k: Optional[int] = None,
+        allowed_ids: AllowedIDs = None,
     ) -> SearchResponse:
         """
         Run the full similarity search pipeline for a query image.
@@ -142,13 +163,21 @@ class SimilaritySearchService:
         Steps:
             1. Extract a 2048-d L2-normalized embedding via EmbeddingService.
             2. Search the FAISS index for the top-k nearest neighbours.
-            3. Wrap each (item_id, score) pair in a SearchResult.
+            3. (Optional) Filter results to ``allowed_ids``.
+            4. Wrap each (item_id, score) pair in a SearchResult.
 
         Args:
             image_input: A file path (str), raw bytes, or PIL.Image —
                          anything accepted by EmbeddingService.
             top_k:       Maximum number of results. Falls back to
                          ``self.default_top_k`` if not supplied.
+            allowed_ids: An optional set of item IDs to restrict results
+                         to.  When provided, only FAISS matches whose
+                         ``item_id`` is in this set are returned.  The
+                         service over-fetches from FAISS by a factor of
+                         ``CATEGORY_OVERFETCH_FACTOR`` to compensate for
+                         filtering.  Pass ``None`` (default) for
+                         unfiltered search.
 
         Returns:
             A SearchResponse.  On success, ``response.ok`` is True and
@@ -182,29 +211,47 @@ class SimilaritySearchService:
                 query_time_ms=_elapsed_ms(start),
             )
 
-        matches = faiss_manager.search(query_embedding, top_k=effective_top_k)
+        # When filtering by category, over-fetch so we still have enough
+        # results after discarding items outside the allowed set.
+        fetch_k = effective_top_k
+        if allowed_ids is not None:
+            fetch_k = effective_top_k * self.CATEGORY_OVERFETCH_FACTOR
 
-        # --- Step 3: Build results ---
+        matches = faiss_manager.search(query_embedding, top_k=fetch_k)
+
+        # --- Step 3: Filter (optional) ---
+        if allowed_ids is not None:
+            matches = [
+                (item_id, score)
+                for item_id, score in matches
+                if item_id in allowed_ids
+            ]
+
+        # --- Step 4: Build results (trim to effective_top_k) ---
         results = [
             SearchResult(
                 item_id=item_id,
                 similarity_score=round(score, 4),
             )
-            for item_id, score in matches
+            for item_id, score in matches[:effective_top_k]
         ]
 
         elapsed = _elapsed_ms(start)
 
         logger.info(
-            "SimilaritySearchService: returned %d result(s) in %.1f ms.",
+            "SimilaritySearchService: returned %d result(s) in %.1f ms%s.",
             len(results),
             elapsed,
+            f" (filtered to {len(allowed_ids)} allowed IDs)"
+            if allowed_ids is not None
+            else "",
         )
 
         return SearchResponse(
             results=results,
             total=len(results),
             query_time_ms=round(elapsed, 2),
+            category_filter=len(allowed_ids) if allowed_ids is not None else None,
         )
 
 

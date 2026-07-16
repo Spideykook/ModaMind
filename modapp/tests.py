@@ -6,10 +6,11 @@ Coverage:
   - Category model: __str__, auto-capitalise, slug uniqueness.
   - ClothingItem model: upload validators, __str__, display_category.
   - EmbeddingMetadata model: OneToOne relationship and cascade.
-  - SimilaritySearchView: every request-validation branch + happy path.
+  - SimilaritySearchView: every request-validation branch + happy path
+    + category-filtered search (valid slug, unknown slug, empty category).
   - IndexView: dashboard renders with CSRF meta tag.
 
-EmbeddingService and FaissManager are mocked at the view layer so the
+SimilaritySearchService is mocked at the view layer so the
 suite runs without downloading ResNet50 weights.
 """
 from __future__ import annotations
@@ -23,6 +24,7 @@ from django.urls import reverse
 from PIL import Image
 from .models import Category, ClothingItem, EmbeddingMetadata
 from .search.faiss_manager import FaissManager
+from .search.similarity_service import SearchResponse, SearchResult
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -255,24 +257,24 @@ class SearchViewTests(TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("not a valid image", r.json()["error"])
 
-    @mock.patch("modapp.views.FaissManager")
-    @mock.patch("modapp.views.EmbeddingService")
-    def test_empty_index_503(self, mock_emb, mock_faiss):
-        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss.return_value.total_vectors = 0
+    @mock.patch("modapp.views.SimilaritySearchService")
+    def test_empty_index_503(self, mock_service_cls):
+        mock_service_cls.return_value.search_by_image.return_value = SearchResponse(
+            error="The similarity index is empty. Seed the catalog and run build_index first.",
+        )
         r = self.client.post(self.url, {"image": _upload()})
         self.assertEqual(r.status_code, 503)
 
-    @mock.patch("modapp.views.FaissManager")
-    @mock.patch("modapp.views.EmbeddingService")
-    def test_happy_path(self, mock_emb, mock_faiss):
+    @mock.patch("modapp.views.SimilaritySearchService")
+    def test_happy_path(self, mock_service_cls):
         cat  = _cat("outerwear", "Outerwear")
         item = ClothingItem.objects.create(
             image=_upload(name="j.jpg"), name="Denim Jacket",
             category=cat, brand="Urban Thread", color="Indigo", is_indexed=True)
-        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss.return_value.total_vectors = 1
-        mock_faiss.return_value.search.return_value = [(item.id, 0.91)]
+        mock_service_cls.return_value.search_by_image.return_value = SearchResponse(
+            results=[SearchResult(item_id=item.id, similarity_score=0.91)],
+            total=1,
+        )
 
         r = self.client.post(self.url, {"image": _upload()})
         self.assertEqual(r.status_code, 200)
@@ -283,15 +285,63 @@ class SearchViewTests(TestCase):
         self.assertEqual(res["color"],    "Indigo")
         self.assertAlmostEqual(res["similarity_score"], 0.91)
 
-    @mock.patch("modapp.views.FaissManager")
-    @mock.patch("modapp.views.EmbeddingService")
-    def test_stale_index_skipped(self, mock_emb, mock_faiss):
-        mock_emb.return_value.extract_embedding.return_value = np.zeros(2048, dtype="float32")
-        mock_faiss.return_value.total_vectors = 1
-        mock_faiss.return_value.search.return_value = [(999_999, 0.5)]
+    @mock.patch("modapp.views.SimilaritySearchService")
+    def test_stale_index_skipped(self, mock_service_cls):
+        mock_service_cls.return_value.search_by_image.return_value = SearchResponse(
+            results=[SearchResult(item_id=999_999, similarity_score=0.5)],
+            total=1,
+        )
         r = self.client.post(self.url, {"image": _upload()})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json(), {"count": 0, "results": []})
+
+    # ── Category filter tests ────────────────────────────────────────────────
+
+    def test_unknown_category_400(self):
+        """Sending a category slug that doesn't exist should return 400."""
+        r = self.client.post(self.url, {"image": _upload(), "category": "nonexistent"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Unknown category slug", r.json()["error"])
+
+    @mock.patch("modapp.views.SimilaritySearchService")
+    def test_category_filter_happy_path(self, mock_service_cls):
+        """A valid category slug should pass allowed_ids to the service."""
+        cat = _cat("outerwear", "Outerwear")
+        item = ClothingItem.objects.create(
+            image=_upload(name="c.jpg"), name="Parka",
+            category=cat, brand="Snow", color="Black", is_indexed=True,
+        )
+        mock_service_cls.return_value.search_by_image.return_value = SearchResponse(
+            results=[SearchResult(item_id=item.id, similarity_score=0.88)],
+            total=1,
+            category_filter=1,
+        )
+
+        r = self.client.post(self.url, {"image": _upload(), "category": "outerwear"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["results"][0]["name"], "Parka")
+
+        # Verify allowed_ids was passed to the service.
+        call_kwargs = mock_service_cls.return_value.search_by_image.call_args
+        self.assertIn("allowed_ids", call_kwargs.kwargs)
+        self.assertIsNotNone(call_kwargs.kwargs["allowed_ids"])
+        self.assertIn(item.id, call_kwargs.kwargs["allowed_ids"])
+
+    @mock.patch("modapp.views.SimilaritySearchService")
+    def test_category_filter_no_indexed_items(self, mock_service_cls):
+        """Category exists but has no indexed items → empty allowed_ids, empty results."""
+        _cat("shoes", "Shoes")  # exists but no ClothingItem in it
+        mock_service_cls.return_value.search_by_image.return_value = SearchResponse(
+            results=[], total=0, category_filter=0,
+        )
+
+        r = self.client.post(self.url, {"image": _upload(), "category": "shoes"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["count"], 0)
+
+        # Verify the service received an empty allowed_ids set.
+        call_kwargs = mock_service_cls.return_value.search_by_image.call_args
+        self.assertEqual(call_kwargs.kwargs["allowed_ids"], set())
 
 
 # ── IndexView ─────────────────────────────────────────────────────────────────
