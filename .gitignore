@@ -28,3 +28,4 @@ modapp/search/indexes/*.index
 .vscode/
 .idea/
 ModaMind_Explained.txt
+ModaMind_DevNotes.txt
