@@ -141,15 +141,34 @@ WSGI_APPLICATION = "config.wsgi.application"
 # --------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------
-# Phase 1/2: SQLite. To migrate to PostgreSQL later, swap this block for the
-# 'django.db.backends.postgresql' engine + connection credentials (sourced
-# from environment variables, following the same pattern as SECRET_KEY).
+# Phase 3: PostgreSQL. Connection credentials are sourced from environment
+# variables, following the same pattern as SECRET_KEY and DEBUG above.
+# Swap these values in your .env file for each deployment environment.
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DB_NAME", "modamind_db"),
+        "USER": os.environ.get("DB_USER", "modamind_user"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5432"),
+        # Keep persistent DB connections alive for 10 minutes instead of
+        # closing them after every request. Dramatically reduces connection
+        # overhead under load (each new PostgreSQL connection takes ~5-10ms
+        # for TCP + TLS handshake + authentication). Set to 0 to close
+        # connections at the end of each request (Django default).
+        "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "600")),
     }
 }
+
+# Fail loudly if a production deployment has no database password configured.
+# An empty password is acceptable for local development (peer/trust auth),
+# but never for a deployed environment.
+if not DEBUG and not DATABASES["default"]["PASSWORD"]:
+    raise ImproperlyConfigured(
+        "DEBUG is False but DB_PASSWORD is unset. Set a database password "
+        "in your environment (see .env.example) before deploying."
+    )
 
 
 # --------------------------------------------------------------------------
