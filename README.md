@@ -38,12 +38,40 @@ scripts/
 
 ## Setup
 
+### 1. PostgreSQL
+
+Install PostgreSQL (v14+ recommended), then create the database and role:
+
+```sql
+CREATE DATABASE modamind_db;
+CREATE USER modamind_user WITH PASSWORD 'your_secure_password';
+ALTER ROLE modamind_user SET client_encoding TO 'utf8';
+ALTER ROLE modamind_user SET default_transaction_isolation TO 'read committed';
+ALTER ROLE modamind_user SET timezone TO 'UTC';
+GRANT ALL PRIVILEGES ON DATABASE modamind_db TO modamind_user;
+```
+
+### 2. Python environment
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
-cp .env.example .env               # then edit .env for real deployments
+### 3. Environment variables
+
+```bash
+cp .env.example .env               # then edit .env with your DB credentials
+```
+
+At minimum, set `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_PORT`
+in `.env` to match the PostgreSQL role you created above. See `.env.example`
+for all available options.
+
+### 4. Migrate and run
+
+```bash
 python manage.py migrate
 python manage.py createsuperuser   # to access /admin/
 python manage.py runserver
@@ -99,10 +127,12 @@ ModaMind treats the `/api/search/` endpoint as a public, unauthenticated
 surface that accepts file uploads and feeds them into a PyTorch model —
 so it's hardened accordingly:
 
-- **Secrets via environment, not source.** `SECRET_KEY`, `DEBUG`, and
-  `ALLOWED_HOSTS` are loaded from `.env` (gitignored) via `python-dotenv`.
-  If `DEBUG=False` and the secret key is still the insecure placeholder,
-  `settings.py` raises `ImproperlyConfigured` instead of starting up.
+- **Secrets via environment, not source.** `SECRET_KEY`, `DEBUG`,
+  `ALLOWED_HOSTS`, and all PostgreSQL credentials (`DB_NAME`, `DB_USER`,
+  `DB_PASSWORD`, `DB_HOST`, `DB_PORT`) are loaded from `.env` (gitignored)
+  via `python-dotenv`. If `DEBUG=False` and either the secret key is still
+  the insecure placeholder or `DB_PASSWORD` is unset, `settings.py` raises
+  `ImproperlyConfigured` instead of starting up.
 - **Upload hardening, defense in depth.** Every image — both catalog
   uploads (`ClothingItem.image`) and search queries — passes through:
   1. A hard size cap (`MAX_UPLOAD_SIZE_BYTES`, default 10MB), enforced at
@@ -140,8 +170,9 @@ so it's hardened accordingly:
 
 ## Roadmap (later phases)
 
-- **Phase 3:** Migrate `DATABASES` from SQLite to PostgreSQL (only
-  `config/settings.py` needs to change — the app code is database-agnostic).
+- ~~**Phase 3:** Migrate `DATABASES` from SQLite to PostgreSQL.~~ ✅ Done —
+  `config/settings.py` now uses `django.db.backends.postgresql` with
+  env-driven credentials. No model or migration changes were needed.
 - **Phase 4:** Add `apps/llm/` — a local Llama 3 (via Ollama) reasoning
   layer that takes the FAISS matches plus the query image's
   metadata/embedding neighborhood and generates a natural-language styling
