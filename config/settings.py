@@ -282,6 +282,38 @@ EMBEDDING_VERSION = "resnet50-imagenet1k-v2-l2norm"
 
 
 # --------------------------------------------------------------------------
+# Ollama / LLM configuration (Phase 4)
+# --------------------------------------------------------------------------
+# FashionReasoningService uses these to connect to a local Ollama instance
+# running Llama 3.  The LLM layer is optional — if Ollama is unreachable,
+# the similarity search still works; the user just doesn't get AI styling
+# advice (graceful degradation).
+
+# Base URL for the Ollama REST API.
+#   Local:  http://localhost:11434  (default Ollama port)
+#   Remote: http://gpu-server:11434
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# Which model Ollama should use for generation.
+#   ollama pull llama3       → "llama3"
+#   ollama pull llama3:8b    → "llama3:8b"
+#   ollama pull mistral      → "mistral"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3")
+
+# HTTP timeout (seconds) for a single Ollama /api/generate call.
+# LLM inference is slow (5-30s typical, 60s+ on first cold start).
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
+
+# Sampling temperature (0.0 = deterministic, 1.0 = very creative).
+# 0.7 balances coherence with variety for fashion advice.
+OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.7"))
+
+# Feature toggle.  Set to "False" to disable AI reasoning entirely
+# (useful if Ollama is not installed or if you want faster responses
+# during development/testing).
+OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "True") == "True"
+
+# --------------------------------------------------------------------------
 # Logging
 # --------------------------------------------------------------------------
 # Ensures EmbeddingService / FaissManager / build_index `logger.info(...)`
